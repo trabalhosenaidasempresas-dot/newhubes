@@ -271,7 +271,6 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
               ))}
             </div>)}
           </nav>
-          {!isVisitor && <div className="sidebar-bottom-card"><div className="sidebar-card-icon"><Sparkles size={16} /></div><strong>Um espaço para criar.</strong><p>Ideias capixabas em movimento.</p><span>ES+ CRIATIVO <span className="sidebar-card-plus">✳</span></span></div>}
           <button className="profile-switch" onClick={() => setProfileOpen(!profileOpen)}><span className="avatar">{session.name.slice(0, 1).toLocaleUpperCase("pt-BR")}</span><span className="profile-text"><strong>{session.name}</strong><small>{session.role}</small></span><ChevronDown size={15} /></button>
           {profileOpen && <div className="profile-popover"><button onClick={() => { localStorage.removeItem("hubcentral-session"); createClient()?.auth.signOut(); router.replace("/login"); }}><LogOut size={16} /> Sair da conta</button></div>}
         </aside>
@@ -286,7 +285,12 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
               <div className="notification-wrap"><button className={`top-icon-button ${showNotifications ? "selected" : ""}`} onClick={() => setShowNotifications(!showNotifications)} aria-label="Notificações"><Bell size={19} />{notifications.some((item) => !item.read) && <i />}</button>
                 {showNotifications && <NotificationPopover notifications={notifications} onRead={markNotificationsRead} onClose={() => setShowNotifications(false)} />}
               </div>
-              <div className="topbar-divider" /><span className="topbar-date">QUI, 02 OUT 2026</span><span className="avatar topbar-avatar">{session.name.slice(0, 1).toLocaleUpperCase("pt-BR")}</span>
+             <div className="topbar-divider" />
+              <span className="topbar-date">
+              {new Date().toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase()}
+              </span>
+              <span className="avatar topbar-avatar">{session.name.slice(0, 1).toLocaleUpperCase("pt-BR")}</span>
+
             </div>
           </header>
           <main className="page-main" key={pathname}>{isVisitor && pathname !== "/agenda" ? <div className="access-denied"><ShieldCheck size={38} /><h2>Acesso restrito</h2><p>Seu perfil de visitante permite solicitar e acompanhar eventos na agenda.</p><Link className="button button-primary" href="/agenda">Ir para a agenda</Link></div> : children}</main>

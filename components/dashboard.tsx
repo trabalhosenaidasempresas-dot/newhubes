@@ -47,7 +47,7 @@ export function Dashboard() {
   return (
     <div className="dashboard-page">
       <div className="welcome-banner">
-        <div className="welcome-copy"><div className="welcome-date"><span className="date-sun">✳</span> QUINTA-FEIRA, 02 DE OUTUBRO DE 2026</div><h1>Bom dia, {session?.name.split(" ")[0] ?? "equipe"} <span>✳</span></h1><p>Acompanhe o que acontece no HUB ES+ hoje.</p></div>
+        <div className="welcome-copy"><div className="welcome-date"><span className="date-sun">✳</span> </div><h1>Olá, {session?.name.split(" ")[0] ?? "equipe"} <span>✳</span></h1><p>Acompanhe o que acontece no HUB ES+ hoje.</p></div>
         <div className="welcome-art"><div className="art-ring ring-a" /><div className="art-ring ring-b" /><div className="art-circle"><Sparkles size={31} /></div><span className="art-star">✳</span><span className="art-dot" /></div>
         <span className="banner-index">01 <i /> 04</span>
       </div>

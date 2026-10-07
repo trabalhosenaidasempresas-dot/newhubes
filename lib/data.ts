@@ -18,7 +18,17 @@ export type HubRecord = {
   history?: { action: string; actor: string; at: string; details: string }[];
   priority?: string;
   amount?: number;
+  allowedRoles?: PermissionGroup[];
 };
+
+export type PermissionGroup = "admin" | "colaborador" | "visitante";
+export const permissionGroups: { key: PermissionGroup; label: string; roles: string[] }[] = [
+  { key: "admin", label: "Admin", roles: ["administrador", "administração"] },
+  { key: "colaborador", label: "Colaborador", roles: ["administração", "recepção", "manutenção", "limpeza"] },
+  { key: "visitante", label: "Visitante", roles: ["visitante"] },
+];
+export const canAccessByPermission = (allowedRoles: PermissionGroup[] | undefined, role: string) =>
+  !!allowedRoles?.some((group) => permissionGroups.find((item) => item.key === group)?.roles.includes(role));
 
 export type FieldKind = "text" | "select" | "date" | "number" | "textarea";
 export type Field = { key: keyof HubRecord; label: string; kind?: FieldKind; options?: string[]; required?: boolean };

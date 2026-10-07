@@ -10,10 +10,32 @@ import {
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { HubRecord, ModuleKey, Field, getModuleKey, moduleConfig } from "@/lib/data";
+import { HubRecord, ModuleKey, Field, PermissionGroup, canAccessByPermission, getModuleKey, moduleConfig, permissionGroups } from "@/lib/data";
 import { useHubData } from "@/components/app-shell";
 import { createClient } from "@/lib/supabase";
 import { suggestOccurrence } from "@/lib/occurrence-suggestions";
+
+const GESTAODOC_EXTENSIONS = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "csv", "txt", "odt", "ods", "odp", "rtf", "jpg", "jpeg", "png", "gif", "webp"];
+const GESTAODOC_ACCEPT = GESTAODOC_EXTENSIONS.map((extension) => `.${extension}`).join(",");
+function validateGestaoDocFile(file: File) {
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  if (!GESTAODOC_EXTENSIONS.includes(extension)) return "Formato não permitido. Envie PDF, Word, Excel, PowerPoint, CSV, TXT, ODF, RTF ou imagem.";
+  if (file.size > 10 * 1024 * 1024) return "O arquivo deve ter no máximo 10 MB.";
+  return "";
+}
+function formatFileSize(bytes: number) {
+  return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const permissionsLabel = (groups?: PermissionGroup[]) => !groups?.length ? "Não definidas" : groups.length === permissionGroups.length ? "Todos" : permissionGroups.filter((group) => groups.includes(group.key)).map((group) => group.label).join(", ");
+
+function PermissionsPicker({ value, onChange }: { value: PermissionGroup[]; onChange: (next: PermissionGroup[]) => void }) {
+  const row = { display: "flex", alignItems: "center", gap: 8 } as const;
+  return <div className="form-field"><label>Quem pode acessar esta configuração?</label>
+    <label style={row}><input type="checkbox" checked={value.length === permissionGroups.length} onChange={(event) => onChange(event.target.checked ? permissionGroups.map((group) => group.key) : [])} /> Todos os perfis</label>
+    {permissionGroups.map((group) => <label key={group.key} style={row}><input type="checkbox" checked={value.includes(group.key)} onChange={(event) => onChange(event.target.checked ? [...value, group.key] : value.filter((item) => item !== group.key))} /> {group.label}</label>)}
+    <small>Selecione pelo menos um perfil.</small></div>;
+}
 
 const statusOptions: Record<ModuleKey, string[]> = {
   ocorrencias: ["Aberta", "Em análise", "Em execução", "Resolvida", "Cancelada"],
@@ -67,12 +89,16 @@ function RegistryPage({ module }: { module: ModuleKey }) {
   const [selected, setSelected] = useState<HubRecord | null>(null);
   const [upload, setUpload] = useState<File | null>(null);
   const [agendaConflict, setAgendaConflict] = useState("");
+  const [permTab, setPermTab] = useState<"general" | "permissions">("general");
+  const [permGroups, setPermGroups] = useState<PermissionGroup[]>([]);
   const values = useForm<FormValues, unknown, ParsedFormValues>({ resolver: zodResolver(validationSchema), defaultValues: { title: "", category: "", owner: session?.name ?? "", location: "", due: "", description: "", priority: "Média", amount: undefined, code: "" } });
-  const entries = useMemo(() => records.filter((item) => item.module === module && (category === "Todas as categorias" || item.category === category) && `${item.title} ${item.code} ${item.category} ${item.owner} ${item.location}`.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR"))), [records, module, category, search]);
-  const categories = [...new Set(records.filter((item) => item.module === module && item.category).map((item) => item.category))];
+  const canViewRecord = (item: HubRecord) => module !== "configuracoes" || role === "administrador" || canAccessByPermission(item.allowedRoles, role);
+  const entries = useMemo(() => records.filter((item) => item.module === module && canViewRecord(item) && (category === "Todas as categorias" || item.category === category) && `${item.title} ${item.code} ${item.category} ${item.owner} ${item.location}`.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR"))), [records, module, category, search, role]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const categories = [...new Set(records.filter((item) => item.module === module && item.category && canViewRecord(item)).map((item) => item.category))];
   const isVisitor = role === "visitante";
   const availableStatuses = statusOptions[module].filter((status) => {
     if (module === "agenda") return role === "administrador";
+    if (module === "configuracoes") return role === "administrador";
     if (module === "compras" && role === "administrador") return status !== "Cancelada";
     if (module === "compras" && role === "administração") return status !== "Aprovada";
     if (module === "insumos" && ["manutenção", "limpeza"].includes(role)) return status === "Solicitação de baixa";
@@ -84,13 +110,16 @@ function RegistryPage({ module }: { module: ModuleKey }) {
     values.reset({ title: "", category: "", owner: session?.name ?? "", location: "", due: "", description: "", priority: "Média", amount: undefined, code: "" });
     setUpload(null);
     setAgendaConflict("");
+    setPermTab("general");
+    setPermGroups([]);
     setModal(true);
   }
 
   async function submit(valuesFromForm: ParsedFormValues) {
+    if (module === "configuracoes" && permGroups.length === 0) { setPermTab("permissions"); notify("Selecione pelo menos um perfil na aba Permissões."); return; }
     let description = valuesFromForm.description ?? "";
     if (upload) {
-      if (module === "agenda") {
+      if (module === "agenda" && /\.csv$/i.test(upload.name)) {
         const lines = (await upload.text()).split(/\r?\n/).filter((line) => line.trim());
         const columns = (lines[0] ?? "").toLocaleLowerCase("pt-BR").split(",").map((column) => column.trim());
         const emailColumn = columns.indexOf("email");
@@ -100,6 +129,8 @@ function RegistryPage({ module }: { module: ModuleKey }) {
         if (attendees.length === 0) { notify("Nenhuma linha válida encontrada no CSV. Confira nome e e-mail."); return; }
         description = `${description}\nLista CSV: ${attendees.length} participante(s) com dados válidos.`;
       } else {
+        const fileProblem = module === "gestaodoc" ? validateGestaoDocFile(upload) : "";
+        if (fileProblem) { notify(fileProblem); return; }
         if (upload.size > 10 * 1024 * 1024) { notify("O arquivo deve ter no máximo 10 MB."); return; }
         const supabase = createClient();
         if (supabase) {
@@ -122,6 +153,7 @@ function RegistryPage({ module }: { module: ModuleKey }) {
       owner: valuesFromForm.owner || session?.name || "Equipe HUB ES+", location: valuesFromForm.location || "HUB ES+",
       due: valuesFromForm.due || new Date().toISOString().slice(0, 10), description,
       priority: valuesFromForm.priority || "Média", amount: valuesFromForm.amount, code: valuesFromForm.code || undefined,
+      ...(module === "configuracoes" ? { allowedRoles: permGroups } : {}),
     };
     const createdRecord = await addRecord(record);
     if (module === "ocorrencias" && upload) {
@@ -143,7 +175,11 @@ function RegistryPage({ module }: { module: ModuleKey }) {
   }
 
   const stateCounts = statusOptions[module].map((status) => ({ status, count: entries.filter((item) => item.status === status).length })).filter((item) => item.count > 0);
-  if (!canManage[role]?.includes(module) && !isVisitor) return <AccessPanel />;
+  if (!canManage[role]?.includes(module) && !isVisitor && module !== "configuracoes") return <AccessPanel />;
+  function openRecord(entry: HubRecord) {
+    if (!canViewRecord(entry)) { notify("Você não possui permissão para acessar esta configuração."); return; }
+    setSelected(entry);
+  }
   return (
     <div className="module-page">
       <div className="page-heading module-heading"><div><div className="eyebrow">HUB ES+ <span className="heading-spark">✳</span> GESTÃO</div><h1>{config.title}</h1><p>{config.description}</p></div>
@@ -160,25 +196,28 @@ function RegistryPage({ module }: { module: ModuleKey }) {
           <label className="filter-select"><Filter size={14} /><select value={category} onChange={(event) => setCategory(event.target.value)}><option>Todas as categorias</option>{categories.map((item) => <option key={item}>{item}</option>)}</select><ChevronDown size={13} /></label>
           {module === "documentos" && <label className="button button-outline upload-quick"><Upload size={15} /> Upload<input type="file" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx" onChange={(event) => { const file = event.target.files?.[0]; if (file) { setUpload(file); setModal(true); } }} hidden /></label>}
         </div></div>
-        {module === "agenda" ? <EventList entries={entries} onSelect={setSelected} /> : <div className="table-scroll"><table className="data-table registry-table"><thead><tr><th>REGISTRO</th><th>CATEGORIA</th><th>{module === "insumos" ? "QUANTIDADE / LOCAL" : module === "compras" ? "SOLICITANTE" : module === "equipamentos" ? "LOCAL / RESPONSÁVEL" : "RESPONSÁVEL"}</th><th>{module === "documentos" || module === "contratos" ? "VALIDADE" : module === "compras" ? "VALOR ESTIMADO" : "ATUALIZADO / PRAZO"}</th><th>STATUS</th><th /></tr></thead><tbody>{entries.map((entry) => <tr key={entry.id} onClick={() => setSelected(entry)} className="clickable-row"><td><span className="table-primary">{entry.title}<small>{entry.code}</small></span></td><td><span className="category-chip">{entry.category || "Geral"}</span></td><td>{module === "insumos" ? <><strong className="stock-number">{entry.amount ?? entry.description.split("•")[0]}</strong><small className="table-sub">{entry.location}</small></> : module === "equipamentos" ? <>{entry.location}<small className="table-sub">{entry.owner}</small></> : entry.owner}</td><td>{module === "compras" ? entry.amount ? `R$ ${entry.amount.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` : "—" : formatDate(entry.due)}</td><td><span className={`status-tag ${statusVariant(entry.status)}`}><i />{entry.status}</span></td><td><button className="row-arrow" onClick={(event) => { event.stopPropagation(); setSelected(entry); }} aria-label="Abrir registro"><ChevronRight size={17} /></button></td></tr>)}</tbody></table>
+        {module === "agenda" ? <EventList entries={entries} onSelect={setSelected} /> : <div className="table-scroll"><table className="data-table registry-table"><thead><tr><th>REGISTRO</th><th>CATEGORIA</th><th>{module === "insumos" ? "QUANTIDADE / LOCAL" : module === "compras" ? "SOLICITANTE" : module === "equipamentos" ? "LOCAL / RESPONSÁVEL" : "RESPONSÁVEL"}</th><th>{module === "documentos" || module === "contratos" ? "VALIDADE" : module === "compras" ? "VALOR ESTIMADO" : "ATUALIZADO / PRAZO"}</th><th>STATUS</th><th /></tr></thead><tbody>{entries.map((entry) => <tr key={entry.id} onClick={() => openRecord(entry)} className="clickable-row"><td><span className="table-primary">{entry.title}<small>{entry.code}</small></span></td><td><span className="category-chip">{entry.category || "Geral"}</span></td><td>{module === "insumos" ? <><strong className="stock-number">{entry.amount ?? entry.description.split("•")[0]}</strong><small className="table-sub">{entry.location}</small></> : module === "equipamentos" ? <>{entry.location}<small className="table-sub">{entry.owner}</small></> : entry.owner}</td><td>{module === "compras" ? entry.amount ? `R$ ${entry.amount.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` : "—" : formatDate(entry.due)}</td><td><span className={`status-tag ${statusVariant(entry.status)}`}><i />{entry.status}</span></td><td><button className="row-arrow" onClick={(event) => { event.stopPropagation(); openRecord(entry); }} aria-label="Abrir registro"><ChevronRight size={17} /></button></td></tr>)}</tbody></table>
           {!entries.length && <div className="empty-state"><div className="empty-illustration"><FileText size={25} /></div><h3>Nenhum registro encontrado</h3><p>{search ? "Tente mudar os termos da busca ou os filtros." : "Adicione o primeiro registro deste módulo."}</p>{canCreate && !search && <button className="button button-primary" onClick={openCreate}><Plus size={16} /> Novo registro</button>}</div>}</div>}
       </section>
 
       {modal && <div className="modal-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setModal(false); }}><section className="form-modal" role="dialog" aria-modal="true" aria-labelledby="form-title"><div className="modal-heading"><div><span className="eyebrow">{module === "ocorrencias" ? "NOVA SOLICITAÇÃO" : module === "agenda" ? "SOLICITAÇÃO DE ESPAÇO" : `CADASTRO · ${config.title.toUpperCase()}`}</span><h2 id="form-title">{module === "agenda" ? "Novo evento" : `Novo ${config.singular}`}</h2></div><button className="modal-close" onClick={() => setModal(false)} aria-label="Fechar"><X size={19} /></button></div>
-        <form className="module-form" onSubmit={values.handleSubmit(submit)}>
-          {config.fields.map((field) => <FormField key={field.key} field={field} form={values} onChange={onFormChange} />)}
+        <form className="module-form" onSubmit={values.handleSubmit(submit, () => setPermTab("general"))}>
+          {module === "configuracoes" && <div className="detail-tabs"><button type="button" className={permTab === "general" ? "selected" : ""} onClick={() => setPermTab("general")}>Dados gerais</button><button type="button" className={permTab === "permissions" ? "selected" : ""} onClick={() => setPermTab("permissions")}>Permissões</button></div>}
+          {(module !== "configuracoes" || permTab === "general") && config.fields.map((field) => <FormField key={field.key} field={field} form={values} onChange={onFormChange} />)}
+          {module === "configuracoes" && permTab === "permissions" && <PermissionsPicker value={permGroups} onChange={setPermGroups} />}
           {module === "ocorrencias" && <SuggestionBlock text={`${values.watch("title") ?? ""} ${values.watch("description") ?? ""}`} />}
           {module === "agenda" && <>
-            <div className="form-field"><label htmlFor="upload">Lista de participantes (opcional)</label><label className="file-drop" htmlFor="event-csv"><Upload size={17} /><span><strong>Carregar lista CSV</strong><small>ou clique para escolher · máximo 10 MB</small></span><input id="event-csv" type="file" accept=".csv" onChange={(event) => setUpload(event.target.files?.[0] ?? null)} /></label>{upload && <span className="selected-file">{upload.name}</span>}<a className="text-link csv-template" href="/modelo-participantes.csv" download><Download size={14} /> Baixar modelo CSV</a></div>
+            <div className="form-field"><label htmlFor="upload">Lista de participantes (opcional)</label><label className="file-drop" htmlFor="event-csv"><Upload size={17} /><span><strong>{upload?.name ?? "Anexar lista de participantes"}</strong><small>PDF, Word, Excel, PowerPoint, CSV, imagens e outros · máximo 10 MB</small></span><input id="event-csv" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.odt,.ods,.odp,.rtf,.jpg,.jpeg,.png,.gif,.webp,application/pdf,image/*" onChange={(event) => setUpload(event.target.files?.[0] ?? null)} /></label><a className="text-link csv-template" href="/modelo-participantes.csv" download><Download size={14} /> Baixar modelo CSV</a></div>
             {agendaConflict && <div className="conflict-warning"><AlertCircle size={17} /><span>{agendaConflict}</span></div>}
             <div className="form-note"><AlertCircle size={15} /><span>{role === "administrador" ? "Como administrador, este evento será confirmado automaticamente." : "Sua solicitação ficará pendente até a aprovação da Administração."}</span></div>
           </>}
           {module === "ocorrencias" && <div className="form-field"><label htmlFor="occurrence-evidence">Foto ou evidência (opcional)</label><label className="file-drop" htmlFor="occurrence-evidence"><Upload size={17} /><span><strong>{upload?.name ?? "Anexar evidência"}</strong><small>Imagem ou PDF · ficará classificado em Ocorrências</small></span><input id="occurrence-evidence" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={(event) => setUpload(event.target.files?.[0] ?? null)} /></label></div>}
+          {module === "gestaodoc" && <div className="form-field"><label htmlFor="gestaodoc-file">Anexar documento</label><label className="file-drop" htmlFor="gestaodoc-file"><Upload size={17} /><span><strong>{upload?.name ?? "Escolher arquivo"}</strong><small>{upload ? formatFileSize(upload.size) : "PDF, Word, Excel, PowerPoint, CSV, TXT, ODF, RTF ou imagem · máximo 10 MB"}</small></span><input id="gestaodoc-file" type="file" accept={GESTAODOC_ACCEPT} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; const problem = validateGestaoDocFile(file); if (problem) { notify(problem); return; } setUpload(file); }} /></label>{upload && <button type="button" className="text-link" onClick={() => setUpload(null)}><X size={14} /> Remover arquivo</button>}</div>}
           {module === "documentos" && <div className="form-field"><label htmlFor="document-file">Arquivo</label><label className="file-drop" htmlFor="document-file"><Upload size={17} /><span><strong>{upload?.name ?? "Escolher arquivo"}</strong><small>PDF, PNG ou JPG · Supabase Storage quando configurado</small></span><input id="document-file" type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={(event) => setUpload(event.target.files?.[0] ?? null)} /></label></div>}
           <div className="form-actions"><button type="button" className="button button-outline" onClick={() => setModal(false)}>Cancelar</button><button className="button button-dark" type="submit" disabled={values.formState.isSubmitting || !!agendaConflict}>{values.formState.isSubmitting ? "Salvando..." : <>{module === "agenda" ? "Enviar solicitação" : "Salvar registro"} <ArrowRight size={15} /></>}</button></div>
         </form>
       </section></div>}
-      {selected && <RecordDetail record={selected} onClose={() => setSelected(null)} canEdit={canEditDetails} canDelete={role === "administrador"} statuses={availableStatuses} onUpdate={(updated) => { setSelected({ ...updated, updatedAt: new Date().toISOString() }); void updateRecord(updated); }} onDelete={deleteRecord} />}
+      {selected && canViewRecord(selected) && <RecordDetail record={selected} onClose={() => setSelected(null)} canEdit={canEditDetails} canDelete={role === "administrador"} statuses={availableStatuses} onUpdate={(updated) => { setSelected({ ...updated, updatedAt: new Date().toISOString() }); void updateRecord(updated); }} onDelete={deleteRecord} />}
     </div>
   );
 }
@@ -218,6 +257,10 @@ function EventList({ entries, onSelect }: { entries: HubRecord[]; onSelect: (rec
 function RecordDetail({ record, onClose, canEdit, canDelete, statuses, onUpdate, onDelete }: { record: HubRecord; onClose: () => void; canEdit: boolean; canDelete: boolean; statuses: string[]; onUpdate: (record: HubRecord) => void; onDelete: (id: string) => void }) {
   const [tab, setTab] = useState<"details" | "history">("details");
   const [editing, setEditing] = useState(false);
+  const [editTab, setEditTab] = useState<"general" | "permissions">("general");
+  const [editGroups, setEditGroups] = useState<PermissionGroup[]>(record.allowedRoles ?? []);
+  const isConfig = record.module === "configuracoes";
+  const { notify } = useHubData();
   const availableStatuses = statuses.includes(record.status) ? statuses : [record.status, ...statuses];
   const form = useForm<FormValues, unknown, ParsedFormValues>({
     resolver: zodResolver(validationSchema),
@@ -225,16 +268,40 @@ function RecordDetail({ record, onClose, canEdit, canDelete, statuses, onUpdate,
   });
   function beginEdit() {
     form.reset({ title: record.title, code: record.code, category: record.category, owner: record.owner, location: record.location, due: record.due, description: record.description, priority: record.priority, amount: record.amount });
+    setEditGroups(record.allowedRoles ?? []);
+    setEditTab("general");
     setEditing(true);
   }
+  const fileUrl = record.description.match(/https?:\/\/\S+/)?.[0];
+  async function openDocument() {
+    if (!fileUrl) return;
+    const tabWindow = window.open("about:blank", "_blank");
+    if (tabWindow) tabWindow.opener = null;
+    let target = fileUrl;
+    const storagePath = fileUrl.match(/\/object\/sign\/hub-files\/([^?]+)/)?.[1];
+    const supabase = createClient();
+    if (storagePath && supabase) {
+      const { data } = await supabase.storage.from("hub-files").createSignedUrl(decodeURIComponent(storagePath), 3600);
+      if (data?.signedUrl) target = data.signedUrl;
+    }
+    if (tabWindow) tabWindow.location.href = target; else window.open(target, "_blank", "noopener,noreferrer");
+  }
   return <div className="modal-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="detail-modal" role="dialog" aria-modal="true" aria-label={record.title}><div className="detail-top"><span className="detail-code">{record.code}</span><button className="modal-close" onClick={onClose} aria-label="Fechar"><X size={19} /></button></div><h2>{record.title}</h2><div className="detail-badges"><span className={`status-tag ${statusVariant(record.status)}`}><i />{record.status}</span><span className="category-chip">{record.category}</span></div><div className="detail-tabs"><button className={tab === "details" ? "selected" : ""} onClick={() => setTab("details")}>Informações</button><button className={tab === "history" ? "selected" : ""} onClick={() => setTab("history")}><History size={14} /> Histórico</button></div>
-    {tab === "details" ? editing ? <form className="module-form detail-edit-form" onSubmit={form.handleSubmit((values) => { onUpdate({ ...record, ...values, amount: values.amount, category: values.category ?? record.category, owner: values.owner ?? record.owner, location: values.location ?? record.location, due: values.due ?? record.due, description: values.description ?? record.description, priority: values.priority ?? record.priority }); setEditing(false); })}>
-      {moduleConfig[record.module].fields.map((field) => <FormField field={field} form={form} onChange={() => undefined} key={field.key} />)}
+    {tab === "details" ? editing ? <form className="module-form detail-edit-form" onSubmit={form.handleSubmit((values) => {
+      if (isConfig && editGroups.length === 0) { setEditTab("permissions"); notify("Selecione pelo menos um perfil na aba Permissões."); return; }
+      const sameGroups = editGroups.length === (record.allowedRoles?.length ?? -1) && editGroups.every((group) => record.allowedRoles?.includes(group));
+      onUpdate({ ...record, ...values, amount: values.amount, category: values.category ?? record.category, owner: values.owner ?? record.owner, location: values.location ?? record.location, due: values.due ?? record.due, description: values.description ?? record.description, priority: values.priority ?? record.priority, ...(isConfig ? { allowedRoles: sameGroups ? record.allowedRoles : editGroups } : {}) }); setEditing(false);
+    }, () => setEditTab("general"))}>
+      {isConfig && <div className="detail-tabs"><button type="button" className={editTab === "general" ? "selected" : ""} onClick={() => setEditTab("general")}>Dados gerais</button><button type="button" className={editTab === "permissions" ? "selected" : ""} onClick={() => setEditTab("permissions")}>Permissões</button></div>}
+      {(!isConfig || editTab === "general") && moduleConfig[record.module].fields.map((field) => <FormField field={field} form={form} onChange={() => undefined} key={field.key} />)}
+      {isConfig && editTab === "permissions" && <PermissionsPicker value={editGroups} onChange={setEditGroups} />}
       <div className="form-actions"><button type="button" className="button button-outline" onClick={() => setEditing(false)}>Cancelar</button><button className="button button-dark" type="submit"><Check size={15} /> Salvar alterações</button></div>
     </form> : <div className="detail-content">{[
       ["Responsável", record.owner], ["Local / espaço", record.location], ["Data / prazo", formatDate(record.due)], ["Prioridade", record.priority || "—"], ["Valor", record.amount ? `R$ ${record.amount.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` : "—"], ["Descrição", record.description || "Sem descrição."],
-    ].map(([label, value]) => <div key={label} className="detail-field"><small>{label}</small><p>{value}</p></div>)}
-      {record.description.match(/https?:\/\/\S+/) && <a href={record.description.match(/https?:\/\/\S+/)?.[0]} target="_blank" rel="noreferrer" className="text-link">Abrir arquivo <ArrowRight size={14} /></a>}
+            ...(isConfig ? [["Permissões", permissionsLabel(record.allowedRoles)]] : []),
+          ].map(([label, value]) => <div key={label} className="detail-field"><small>{label}</small><p>{value}</p></div>)}
+      {(record.module === "agenda" || record.module === "gestaodoc") && fileUrl && <button type="button" className="button button-outline" onClick={() => void openDocument()}><FileText size={15} /> Visualizar documento</button>}
+      {record.module !== "agenda" && record.module !== "gestaodoc" && record.description.match(/https?:\/\/\S+/) && <a href={record.description.match(/https?:\/\/\S+/)?.[0]} target="_blank" rel="noreferrer" className="text-link">Abrir arquivo <ArrowRight size={14} /></a>}
       {(canEdit || canDelete || statuses.length > 0) && <div className="detail-actions">{canEdit && <button className="button button-outline" onClick={beginEdit}>Editar informações</button>}{statuses.length > 0 && <label className="status-edit">Alterar status<select value={record.status} onChange={(event) => onUpdate({ ...record, status: event.target.value })}>{availableStatuses.map((status) => <option key={status}>{status}</option>)}</select></label>}{canDelete && <button className="button button-danger-ghost" onClick={() => { onDelete(record.id); onClose(); }}><X size={15} /> Remover</button>}</div>}</div>
       : <div className="detail-timeline">{(record.history?.length ? record.history : [
         { action: "Registro criado", actor: record.owner, at: record.createdAt || record.updatedAt, details: `Código ${record.code}` },
