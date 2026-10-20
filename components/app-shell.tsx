@@ -9,13 +9,14 @@ import {
   Settings2, ShieldCheck, ShoppingCart, Sparkles, Wrench, X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase";
+import { VisitorWelcome } from "@/components/visitor-welcome";
 import { HubRecord, ModuleKey, moduleConfig, seedRecords } from "@/lib/data";
 
 type UserSession = { name: string; email: string; role: string };
 type HubNotification = { id: string; title: string; message: string; link: string; read: boolean; createdAt: string };
 type HubContextValue = {
   records: HubRecord[];
-  addRecord: (record: Omit<HubRecord, "id" | "createdAt" | "updatedAt" | "history" | "code"> & { code?: string }) => Promise<HubRecord>;
+  addRecord: (record: Omit<HubRecord, "id" | "createdAt" | "updatedAt" | "history" | "code"> & { code?: string }) => Promise<HubRecord | null>;
   updateRecord: (record: HubRecord) => Promise<void>;
   deleteRecord: (id: string) => Promise<void>;
   session: UserSession | null;
@@ -44,6 +45,8 @@ const navItems: { href: string; label: string; icon: typeof LayoutDashboard; gro
   { href: "/relatorios", label: "Relatórios", icon: ChartNoAxesColumn, group: "GESTÃO" },
   { href: "/configuracoes", label: "Configurações", icon: Settings2, group: "SISTEMA" },
 ];
+
+const visitorRoutes = ["/agenda", "/ocorrencias"];
 
 function initialRecords(): HubRecord[] {
   try {
@@ -77,6 +80,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
   const [session, setSession] = useState<UserSession | null>(null);
   const [ready, setReady] = useState(false);
   const [toast, setToast] = useState("");
+  const [saveError, setSaveError] = useState("");
   const [notifications, setNotifications] = useState<HubNotification[]>([]);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -98,9 +102,9 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
     setNotifications(localNotifications);
     const supabase = createClient();
     if (supabase) {
-      supabase.from("demo_records").select("id,module,code,payload,updated_at").then(({ data, error }) => {
+      supabase.from("demo_records").select("id,module,code,payload,updated_at,created_by").then(({ data, error }) => {
         if (data?.length) {
-          const remote = data.map((row) => ({ ...(row.payload as HubRecord), id: row.id, module: row.module as ModuleKey, code: row.code, createdAt: row.payload?.createdAt ?? row.updated_at, updatedAt: row.updated_at }));
+          const remote = data.map((row) => ({ ...(row.payload as HubRecord), id: row.id, module: row.module as ModuleKey, code: row.code, createdBy: row.created_by ?? undefined, createdAt: row.payload?.createdAt ?? row.updated_at, updatedAt: row.updated_at }));
           setRecords(remote);
           localStorage.setItem("hubcentral-records", JSON.stringify(remote));
         } else if (error) {
@@ -159,7 +163,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
     localStorage.setItem("hubcentral-records", JSON.stringify(next));
   }
 
-  async function addRecord(input: Omit<HubRecord, "id" | "createdAt" | "updatedAt" | "history" | "code"> & { code?: string }): Promise<HubRecord> {
+  async function addRecord(input: Omit<HubRecord, "id" | "createdAt" | "updatedAt" | "history" | "code"> & { code?: string }): Promise<HubRecord | null> {
     const seq = String(records.filter((r) => r.module === input.module).length + 1).padStart(3, "0");
     const code = input.code || `${input.module.slice(0, 3).toUpperCase()}-${seq}`;
     const now = new Date().toISOString();
@@ -168,15 +172,18 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
       history: [{ action: "Registro criado", actor: input.owner || session?.name || "Equipe HUB ES+", at: now, details: `Código ${code}` }],
     };
     const next = [record, ...records];
-    persist(next);
     const supabase = createClient();
     if (supabase) {
       const { error } = await supabase.from("demo_records").insert({
         id: record.id, module: record.module, code, title: record.title, status: record.status,
         payload: record, created_by: (await supabase.auth.getUser()).data.user?.id,
       });
-      if (error) { notify(`Salvo nesta demonstração, mas não no banco: ${error.message}`); return record; }
+      if (error) {
+        setSaveError(`Não foi possível salvar no servidor (${error.message}). O registro não foi criado nem mantido neste navegador; ele não está disponível para outros usuários. Tente novamente.`);
+        return null;
+      }
     }
+    persist(next);
     if (!supabase && record.module === "agenda") addLocalNotification("Nova solicitação de agenda", `${record.title} · ${record.location}`, "/agenda");
     if (!supabase && record.module === "insumos" && record.status === "Estoque baixo") addLocalNotification("Estoque abaixo do mínimo", record.title, "/insumos");
     const successMessage: Record<ModuleKey, string> = {
@@ -246,6 +253,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
     }
   }
   const isVisitor = session?.role?.toLocaleLowerCase("pt-BR") === "visitante";
+  useEffect(() => { if (isVisitor && pathname === "/dashboard") router.replace("/agenda"); }, [isVisitor, pathname, router]);
   const searchResults = useMemo(() => {
     if (!search.trim()) return [];
     return records.filter((record) => `${record.title} ${record.code} ${record.category}`.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR"))).slice(0, 6);
@@ -263,10 +271,10 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
             <span className="brand-symbol">+</span><span className="brand-name">HUB ES<span className="brand-plus">+</span><small>GESTÃO INTEGRADA</small></span>
           </Link>
           <div className="sidebar-rule" />
-          <div className="workspace-select"><div className="workspace-avatar">H</div><div><strong>Hub ES+</strong><small>Espaço de trabalho</small></div><ChevronDown size={15} /></div>
+          {!isVisitor && <div className="workspace-select"><div className="workspace-avatar">H</div><div><strong>Hub ES+</strong><small>Espaço de trabalho</small></div><ChevronDown size={15} /></div>}
           <nav className="side-nav">
-            {groups.map((group) => <div key={group} className="nav-group"><div className="nav-heading">{group}</div>
-              {navItems.filter((item) => item.group === group && (!isVisitor || item.href === "/agenda")).map(({ href, label, icon: Icon }) => (
+            {groups.filter((group) => !isVisitor || navItems.some((item) => item.group === group && visitorRoutes.includes(item.href))).map((group) => <div key={group} className="nav-group">{!isVisitor && <div className="nav-heading">{group}</div>}
+              {navItems.filter((item) => item.group === group && (!isVisitor || visitorRoutes.includes(item.href))).map(({ href, label, icon: Icon }) => (
                 <Link key={href} href={href} onClick={() => setMobileOpen(false)} className={`nav-link ${pathname === href ? "active" : ""}`}><Icon size={18} strokeWidth={1.8} /><span>{label}</span>{label === "Ocorrências" && <span className="nav-count">3</span>}</Link>
               ))}
             </div>)}
@@ -282,9 +290,9 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
               <div className="global-search"><Search size={17} /><input ref={searchInput} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar em tudo..." aria-label="Busca global" /><kbd>⌘ K</kbd>
                 {!!search && <div className="search-results">{searchResults.length ? searchResults.map((record) => <Link key={record.id} href={`/${record.module}`} onClick={() => setSearch("")}><span className="search-result-icon"><FileText size={16} /></span><span><strong>{record.title}</strong><small>{record.code} · {record.category}</small></span><span>↗</span></Link>) : <div className="search-empty">Nenhum registro encontrado</div>}</div>}
               </div>
-              <div className="notification-wrap"><button className={`top-icon-button ${showNotifications ? "selected" : ""}`} onClick={() => setShowNotifications(!showNotifications)} aria-label="Notificações"><Bell size={19} />{notifications.some((item) => !item.read) && <i />}</button>
+              {!isVisitor && <div className="notification-wrap"><button className={`top-icon-button ${showNotifications ? "selected" : ""}`} onClick={() => setShowNotifications(!showNotifications)} aria-label="Notificações"><Bell size={19} />{notifications.some((item) => !item.read) && <i />}</button>
                 {showNotifications && <NotificationPopover notifications={notifications} onRead={markNotificationsRead} onClose={() => setShowNotifications(false)} />}
-              </div>
+              </div>}
              <div className="topbar-divider" />
               <span className="topbar-date">
               {new Date().toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase()}
@@ -293,9 +301,10 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
 
             </div>
           </header>
-          <main className="page-main" key={pathname}>{isVisitor && pathname !== "/agenda" ? <div className="access-denied"><ShieldCheck size={38} /><h2>Acesso restrito</h2><p>Seu perfil de visitante permite solicitar e acompanhar eventos na agenda.</p><Link className="button button-primary" href="/agenda">Ir para a agenda</Link></div> : children}</main>
+          <main className="page-main" key={pathname}>{isVisitor && !visitorRoutes.includes(pathname) ? <div className="access-denied"><ShieldCheck size={38} /><h2>Acesso restrito</h2><p>Seu perfil de visitante permite acessar a agenda e as ocorrências.</p><Link className="button button-primary" href="/agenda">Ir para a agenda</Link></div> : <>{isVisitor && pathname === "/agenda" && <VisitorWelcome records={records} />}{children}</>}</main>
           <footer className="app-footer"><span><span className="footer-spark">✳</span> HUB ES+ <span className="footer-dot">·</span> GESTÃO INTEGRADA</span><span>Construído para conectar ideias e transformar espaços.</span></footer>
         </div>
+        {saveError && <div className="toast" role="alert" style={{ bottom: toast ? 84 : undefined, background: "#a8321f" }}><span className="toast-check">!</span>{saveError}<button onClick={() => setSaveError("")} aria-label="Fechar aviso"><X size={15} /></button></div>}
         {toast && <div className="toast"><span className="toast-check">✓</span>{toast}<button onClick={() => setToast("")} aria-label="Fechar aviso"><X size={15} /></button></div>}
       </div>
     </HubContext.Provider>

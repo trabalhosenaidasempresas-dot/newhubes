@@ -19,6 +19,7 @@ export type HubRecord = {
   priority?: string;
   amount?: number;
   allowedRoles?: PermissionGroup[];
+  createdBy?: string;
 };
 
 export type PermissionGroup = "admin" | "colaborador" | "visitante";

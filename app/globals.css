@@ -638,3 +638,29 @@ a { color: inherit; text-decoration: none; }
   .form-field > label { font-size: 9px; }
   .report-kpi > span { font-size: 8px; }
 }
+
+/* Área do Visitante */
+.visitor-welcome { display: grid; gap: 18px; margin-bottom: 26px; }
+.visitor-hero { padding: 34px 32px; color: white; background: linear-gradient(135deg, #0b2a4a 0%, #0057b8 100%); border-radius: 10px; border-bottom: 4px solid var(--orange); }
+.visitor-eyebrow { display: block; margin-bottom: 10px; color: #ffb386; font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.visitor-hero h1 { margin: 0 0 10px; font-size: clamp(26px, 4vw, 38px); line-height: 1.15; }
+.visitor-hero p { max-width: 640px; margin: 0; color: #dbe7f5; font-size: 15px; line-height: 1.6; }
+.visitor-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.visitor-card { display: grid; gap: 6px; padding: 20px; color: var(--ink); text-decoration: none; background: white; border: 1px solid var(--line); border-radius: 10px; transition: border-color .15s, transform .15s; }
+.visitor-card:hover { border-color: var(--orange); transform: translateY(-2px); }
+.visitor-card-icon { display: grid; width: 42px; height: 42px; margin-bottom: 4px; place-items: center; color: var(--blue); background: #eaf2fb; border-radius: 10px; }
+.visitor-card strong { color: var(--navy); font-size: 17px; }
+.visitor-card small { color: #5d6b76; font-size: 13.5px; line-height: 1.5; }
+.visitor-card-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--orange); font-size: 13px; font-weight: 700; }
+.visitor-recent { padding: 18px 20px; background: white; border: 1px solid var(--line); border-radius: 10px; }
+.visitor-recent h2 { margin: 0 0 10px; color: var(--navy); font-size: 15px; }
+.visitor-recent ul { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.visitor-recent li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.visitor-recent li:first-child { border-top: 0; }
+.visitor-recent li span { display: grid; gap: 2px; min-width: 0; }
+.visitor-recent li small { color: var(--muted); font-size: 12px; }
+.visitor-recent li em { flex-shrink: 0; padding: 3px 10px; color: var(--navy); font-size: 12px; font-style: normal; font-weight: 600; background: #eaf2fb; border-radius: 999px; }
+@media (max-width: 680px) {
+  .visitor-hero { padding: 24px 20px; }
+  .visitor-cards { grid-template-columns: 1fr; }
+}

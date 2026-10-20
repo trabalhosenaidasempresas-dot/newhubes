@@ -42,7 +42,8 @@ export default function LoginPage() {
         role: "administrador",
       }));
     }
-    router.replace("/dashboard");
+    const role = JSON.parse(localStorage.getItem("hubcentral-session") ?? "{}").role;
+    router.replace(role === "visitante" ? "/agenda" : "/dashboard");
   }
 
   async function enterAsVisitor(event: React.FormEvent<HTMLFormElement>) {

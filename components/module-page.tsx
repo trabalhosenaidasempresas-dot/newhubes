@@ -80,7 +80,7 @@ function RegistryPage({ module }: { module: ModuleKey }) {
   const { records, addRecord, updateRecord, deleteRecord, session, notify } = useHubData();
   const config = moduleConfig[module];
   const role = session?.role?.toLocaleLowerCase("pt-BR") ?? "visitante";
-  const canEdit = (canManage[role] ?? []).includes(module) || (role === "visitante" && module === "agenda");
+  const canEdit = (canManage[role] ?? []).includes(module) || (role === "visitante" && (module === "agenda" || module === "ocorrencias"));
   const canCreate = canEdit && !(module === "agenda" && role === "recepção");
   const canEditDetails = canEdit && role !== "visitante" && !(module === "agenda" && role !== "administrador") && role !== "recepção";
   const [search, setSearch] = useState("");
@@ -92,11 +92,12 @@ function RegistryPage({ module }: { module: ModuleKey }) {
   const [permTab, setPermTab] = useState<"general" | "permissions">("general");
   const [permGroups, setPermGroups] = useState<PermissionGroup[]>([]);
   const values = useForm<FormValues, unknown, ParsedFormValues>({ resolver: zodResolver(validationSchema), defaultValues: { title: "", category: "", owner: session?.name ?? "", location: "", due: "", description: "", priority: "Média", amount: undefined, code: "" } });
-  const canViewRecord = (item: HubRecord) => module !== "configuracoes" || role === "administrador" || canAccessByPermission(item.allowedRoles, role);
+  const canViewRecord = (item: HubRecord) => (module !== "configuracoes" || role === "administrador" || canAccessByPermission(item.allowedRoles, role)) && !(role === "visitante" && module === "ocorrencias" && item.owner !== session?.name);
   const entries = useMemo(() => records.filter((item) => item.module === module && canViewRecord(item) && (category === "Todas as categorias" || item.category === category) && `${item.title} ${item.code} ${item.category} ${item.owner} ${item.location}`.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR"))), [records, module, category, search, role]);  // eslint-disable-line react-hooks/exhaustive-deps
   const categories = [...new Set(records.filter((item) => item.module === module && item.category && canViewRecord(item)).map((item) => item.category))];
   const isVisitor = role === "visitante";
   const availableStatuses = statusOptions[module].filter((status) => {
+    if (isVisitor) return false;
     if (module === "agenda") return role === "administrador";
     if (module === "configuracoes") return role === "administrador";
     if (module === "compras" && role === "administrador") return status !== "Cancelada";
@@ -150,12 +151,13 @@ function RegistryPage({ module }: { module: ModuleKey }) {
         : module === "insumos" ? "Em estoque" : module === "documentos" || module === "gestaodoc" ? "Ativo" : module === "equipamentos" ? "Disponível" : module === "contratos" ? "Vigente" : "Ativo";
     const record: Omit<HubRecord, "id" | "createdAt" | "updatedAt" | "history" | "code"> & { code?: string } = {
       module, title: valuesFromForm.title, status, category: valuesFromForm.category || config.title,
-      owner: valuesFromForm.owner || session?.name || "Equipe HUB ES+", location: valuesFromForm.location || "HUB ES+",
+      owner: (isVisitor && module === "ocorrencias" ? session?.name : valuesFromForm.owner) || session?.name || "Equipe HUB ES+", location: valuesFromForm.location || "HUB ES+",
       due: valuesFromForm.due || new Date().toISOString().slice(0, 10), description,
-      priority: valuesFromForm.priority || "Média", amount: valuesFromForm.amount, code: valuesFromForm.code || undefined,
+      priority: valuesFromForm.priority || "Média", amount: valuesFromForm.amount, code: valuesFromForm.code || (isVisitor && module === "ocorrencias" ? `OCO-V${crypto.randomUUID().slice(0, 8).toUpperCase()}` : undefined),
       ...(module === "configuracoes" ? { allowedRoles: permGroups } : {}),
     };
     const createdRecord = await addRecord(record);
+    if (!createdRecord) return;
     if (module === "ocorrencias" && upload) {
       await addRecord({
         module: "documentos", title: `Evidência · ${record.title}`, status: "Ativo", category: "Ocorrências",
@@ -183,7 +185,7 @@ function RegistryPage({ module }: { module: ModuleKey }) {
   return (
     <div className="module-page">
       <div className="page-heading module-heading"><div><div className="eyebrow">HUB ES+ <span className="heading-spark">✳</span> GESTÃO</div><h1>{config.title}</h1><p>{config.description}</p></div>
-        {canCreate && <button className="button button-dark" onClick={openCreate}><Plus size={17} /> {isVisitor ? "Solicitar espaço" : module === "agenda" ? "Novo evento" : `${module === "ocorrencias" ? "Nova" : "Novo"} ${config.singular}`}</button>}
+        {canCreate && <button className="button button-dark" onClick={openCreate}><Plus size={17} /> {isVisitor && module === "agenda" ? "Solicitar espaço" : module === "agenda" ? "Novo evento" : `${module === "ocorrencias" ? "Nova" : "Novo"} ${config.singular}`}</button>}
       </div>
 
       {module === "agenda" && <AgendaOverview records={records.filter((item) => item.module === "agenda")} />}
@@ -211,7 +213,7 @@ function RegistryPage({ module }: { module: ModuleKey }) {
             {agendaConflict && <div className="conflict-warning"><AlertCircle size={17} /><span>{agendaConflict}</span></div>}
             <div className="form-note"><AlertCircle size={15} /><span>{role === "administrador" ? "Como administrador, este evento será confirmado automaticamente." : "Sua solicitação ficará pendente até a aprovação da Administração."}</span></div>
           </>}
-          {module === "ocorrencias" && <div className="form-field"><label htmlFor="occurrence-evidence">Foto ou evidência (opcional)</label><label className="file-drop" htmlFor="occurrence-evidence"><Upload size={17} /><span><strong>{upload?.name ?? "Anexar evidência"}</strong><small>Imagem ou PDF · ficará classificado em Ocorrências</small></span><input id="occurrence-evidence" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={(event) => setUpload(event.target.files?.[0] ?? null)} /></label></div>}
+          {module === "ocorrencias" && !isVisitor && <div className="form-field"><label htmlFor="occurrence-evidence">Foto ou evidência (opcional)</label><label className="file-drop" htmlFor="occurrence-evidence"><Upload size={17} /><span><strong>{upload?.name ?? "Anexar evidência"}</strong><small>Imagem ou PDF · ficará classificado em Ocorrências</small></span><input id="occurrence-evidence" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={(event) => setUpload(event.target.files?.[0] ?? null)} /></label></div>}
           {module === "gestaodoc" && <div className="form-field"><label htmlFor="gestaodoc-file">Anexar documento</label><label className="file-drop" htmlFor="gestaodoc-file"><Upload size={17} /><span><strong>{upload?.name ?? "Escolher arquivo"}</strong><small>{upload ? formatFileSize(upload.size) : "PDF, Word, Excel, PowerPoint, CSV, TXT, ODF, RTF ou imagem · máximo 10 MB"}</small></span><input id="gestaodoc-file" type="file" accept={GESTAODOC_ACCEPT} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; const problem = validateGestaoDocFile(file); if (problem) { notify(problem); return; } setUpload(file); }} /></label>{upload && <button type="button" className="text-link" onClick={() => setUpload(null)}><X size={14} /> Remover arquivo</button>}</div>}
           {module === "documentos" && <div className="form-field"><label htmlFor="document-file">Arquivo</label><label className="file-drop" htmlFor="document-file"><Upload size={17} /><span><strong>{upload?.name ?? "Escolher arquivo"}</strong><small>PDF, PNG ou JPG · Supabase Storage quando configurado</small></span><input id="document-file" type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={(event) => setUpload(event.target.files?.[0] ?? null)} /></label></div>}
           <div className="form-actions"><button type="button" className="button button-outline" onClick={() => setModal(false)}>Cancelar</button><button className="button button-dark" type="submit" disabled={values.formState.isSubmitting || !!agendaConflict}>{values.formState.isSubmitting ? "Salvando..." : <>{module === "agenda" ? "Enviar solicitação" : "Salvar registro"} <ArrowRight size={15} /></>}</button></div>
